@@ -7,9 +7,17 @@ The Fibonacci sequence is defined as:
     F(n) = F(n - 1) + F(n - 2)    for n >= 2
 
 so it starts with 0, 1, 1, 2, 3, 5, 8, 13, 21, ...
+
+The module can be imported (see the ``fib_*`` functions) or run as a program:
+
+    python fibonacci.py 10                          # first 10 numbers
+    python fibonacci.py --nth 50                    # F(50)
+    python fibonacci.py --nth 90 --method doubling  # choose the algorithm
 """
 
-from typing import Any, Dict, Iterator, Tuple
+import argparse
+import sys
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 
 def _validate_index(value: Any, name: str = "n") -> int:
@@ -150,3 +158,122 @@ def fib_sequence(count: int) -> Iterator[int]:
         # Hand out the current number, then move to the next pair.
         yield current
         current, following = following, current + following
+
+
+# Maps the value of the --method option to the function that implements it.
+METHODS: Dict[str, Callable[[int], int]] = {
+    "iterative": fib_iterative,
+    "recursive": fib_recursive,
+    "memo": fib_memo,
+    "doubling": fib_fast_doubling,
+}
+
+# Naive recursion becomes very slow above this value; the CLI warns about it.
+_RECURSIVE_WARNING_THRESHOLD = 35
+
+
+def _non_negative_int(text: str) -> int:
+    """argparse "type" function: convert text to a non-negative integer.
+
+    Raises:
+        argparse.ArgumentTypeError: with a friendly message for bad input.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{text}' is not an integer, please enter a whole number >= 0"
+        ) from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(
+            f"{value} is negative, please enter a whole number >= 0"
+        )
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create the command line argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="fibonacci.py",
+        description="Compute Fibonacci numbers with different algorithms.",
+    )
+    parser.add_argument(
+        "count",
+        nargs="?",
+        type=_non_negative_int,
+        help="print the first COUNT Fibonacci numbers (starting from F(0))",
+    )
+    parser.add_argument(
+        "--nth",
+        type=_non_negative_int,
+        metavar="N",
+        help="print only the N-th Fibonacci number F(N)",
+    )
+    parser.add_argument(
+        "--method",
+        choices=list(METHODS),
+        default="iterative",
+        help="algorithm to use (default: %(default)s)",
+    )
+    return parser
+
+
+def _ask_count(parser: argparse.ArgumentParser) -> int:
+    """Interactive mode: ask the user how many numbers to print."""
+    try:
+        text = input("How many Fibonacci numbers do you want to see? ")
+    except EOFError:
+        # No input is available (for example, closed stdin).
+        parser.error("no input was given")
+    try:
+        return _non_negative_int(text.strip())
+    except argparse.ArgumentTypeError as error:
+        parser.error(str(error))
+
+
+def _first_numbers(count: int, method: str) -> List[int]:
+    """Return F(0) .. F(count - 1) computed with the chosen method."""
+    if method == "iterative":
+        # The generator is the natural and fastest way to get a prefix.
+        return list(fib_sequence(count))
+    # Other methods compute every number independently.
+    return [METHODS[method](index) for index in range(count)]
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run the command line interface and return the process exit code."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # Printing numbers with thousands of digits is allowed on purpose.
+    if hasattr(sys, "set_int_max_str_digits"):
+        sys.set_int_max_str_digits(0)
+
+    # The two modes exclude each other.
+    if args.count is not None and args.nth is not None:
+        parser.error("use either COUNT or --nth, not both")
+
+    # Warn (but do not stop) when the slow algorithm gets a large input.
+    size = args.nth if args.nth is not None else args.count
+    if args.method == "recursive" and size is not None and size > _RECURSIVE_WARNING_THRESHOLD:
+        print("Warning: the naive recursive method is very slow for large values.",
+              file=sys.stderr)
+
+    try:
+        if args.nth is not None:
+            # Mode 1: a single number F(N).
+            print(f"F({args.nth}) = {METHODS[args.method](args.nth)}")
+        else:
+            # Mode 2: the first COUNT numbers; ask interactively if not given.
+            count = args.count if args.count is not None else _ask_count(parser)
+            numbers = _first_numbers(count, args.method)
+            print(f"First {count} Fibonacci numbers:")
+            print(" ".join(str(number) for number in numbers))
+    except ValueError as error:
+        # Safety net: library validation errors become friendly messages.
+        parser.error(str(error))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
